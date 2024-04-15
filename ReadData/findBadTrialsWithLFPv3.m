@@ -23,7 +23,11 @@
 % Summary figure now displays the bad trials for 'CheckTheseElectrodes'
 % only.
 
-function [allBadTrials,badTrials] = findBadTrialsWithLFPv3New(monkeyName,expDate,protocolName,folderSourceString,gridType,checkTheseElectrodes,processAllElectrodes,threshold,maxLimit,minLimit,showElectrodes,saveDataFlag,checkPeriod,rejectTolerance,marginalsFlag,arrayString)
+% Option is added to remove bad trials based on PSD for which checkPSDFlag should be set to 1 and 
+% separate threshold (psd_threshold) and frequency range (checkFrequencyRange) should be provided.
+% By default psd_threshold = 6 and checkFrequencyRange = [120 200] Hz;
+
+function [allBadTrials,badTrials] = findBadTrialsWithLFPv3(monkeyName,expDate,protocolName,folderSourceString,gridType,checkTheseElectrodes,processAllElectrodes,threshold,maxLimit,minLimit,showElectrodes,saveDataFlag,checkPeriod,rejectTolerance,marginalsFlag,arrayString,checkPSDFlag)
 
 if ~exist('checkTheseElectrodes','var');     checkTheseElectrodes = [33 12 80 63 44];   end
 if ~exist('processAllElectrodes','var');     processAllElectrodes = 0;                  end
@@ -37,6 +41,8 @@ if ~exist('rejectTolerance','var');          rejectTolerance = 1;               
 if ~exist('showElectrodes','var');           showElectrodes = [];                       end
 if ~exist('marginalsFlag','var');            marginalsFlag = 0;                         end
 if ~exist('arrayString','var');              arrayString = [];                          end
+if ~exist('checkPSDFlag','var');             checkPSDFlag = 0;                          end
+
 folderName = fullfile(folderSourceString,'data',monkeyName,gridType,expDate,protocolName);
 folderSegment = fullfile(folderName,'segmentedData');
 
@@ -83,7 +89,40 @@ for i=1:numElectrodes
     tmpBadTrials = unique([find(maxData > meanData + threshold * stdData) find(minData < meanData - threshold * stdData)]);
     tmpBadTrials2 = unique(find(maxData > maxLimit));
     tmpBadTrials3 = unique(find(minData < minLimit));
-    allBadTrials{electrodeNum} = unique([tmpBadTrials tmpBadTrials2 tmpBadTrials3]);
+    if checkPSDFlag  % borrowed from findBadTrialsWithEEG
+        checkFrequencyRange = [120 200];
+        psd_threshold = 6;
+        
+        Fs = 1/(timeVals(2) - timeVals(1)); %Hz
+        params.tapers   = [3 5];
+        params.pad      = -1;
+        params.Fs       = Fs;
+        params.fpass    = [0 200];
+        params.trialave = 0;
+
+        clear powerVsFreq;
+        [powerVsFreq,freqVals] = mtspectrumc(analogData',params);
+        checkFreqPos = intersect(find(freqVals>checkFrequencyRange(1)),find(freqVals<checkFrequencyRange(2)));
+        powerVsFreq = powerVsFreq(checkFreqPos,:)';
+
+        clear meanTrialData stdTrialData tDplus
+        meanTrialData = mean(powerVsFreq,1,'omitnan');  % mean trial trace
+        stdTrialData = std(powerVsFreq,[],1,'omitnan'); % std across trials
+
+        tDplus = (meanTrialData + (psd_threshold)*stdTrialData);    % upper boundary/criterion
+        tDMinus = (meanTrialData - (psd_threshold)*stdTrialData);    % lower boundary/criterion
+        clear tBoolTrialsPlus tmpBadTrials4
+        tBoolTrialsPlus = sum((powerVsFreq > ones(numTrials,1)*tDplus),2);
+        tBoolTrialsMinus = sum((powerVsFreq < ones(numTrials,1)*tDMinus),2);
+        tmpBadTrials4 = (find(tBoolTrialsPlus>0))';
+        tmpBadTrials5 = (find(tBoolTrialsMinus>0))';
+    else
+        checkFrequencyRange = [];
+        psd_threshold = [];
+        tmpBadTrials4 = [];
+        tmpBadTrials5 = [];
+    end
+    allBadTrials{electrodeNum} = unique([tmpBadTrials tmpBadTrials2 tmpBadTrials3 tmpBadTrials4 tmpBadTrials5]);
 end
 
 numElectrodes = length(checkTheseElectrodes); % check the list for these electrodes only to generate the overall badTrials list
@@ -179,7 +218,7 @@ end
 
 if saveDataFlag
     disp(['Saving ' num2str(length(badTrials)) ' bad trials']);
-    save(fullfile(folderSegment,['badTrials' arrayString '.mat']),'badTrials','checkTheseElectrodes','threshold','maxLimit','minLimit','checkPeriod','allBadTrials','nameElec','rejectTolerance','badElecs','badTrialsMarginalStats');
+    save(fullfile(folderSegment,['badTrials' arrayString '.mat']),'badTrials','checkTheseElectrodes','threshold','maxLimit','minLimit','checkPeriod','allBadTrials','nameElec','rejectTolerance','badElecs','badTrialsMarginalStats','psd_threshold','checkFrequencyRange');
 else
     disp('Bad trials will not be saved..');
 end
